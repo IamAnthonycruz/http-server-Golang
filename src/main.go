@@ -1,55 +1,55 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"io"
 	"net"
-	"os"
+	"strings"
 )
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run tcp.go <port>")
-		os.Exit(1)
-	}
 
-	port := fmt.Sprintf(":%s", os.Args[1])
+func handleConn(conn net.Conn) {
+    defer conn.Close()
 
-	listener, err := net.Listen("tcp", port)
+    reader := bufio.NewReader(conn)
 
-	if err != nil {
-		fmt.Println("Failed ot create listener, err:", err)
-		os.Exit(1)
-	}
-	defer listener.Close()
-	fmt.Printf("listening on %s\n", listener.Addr())
+    for {
+        // ReadString blocks until it finds '\n' or hits an error.
+        // Internally it does exactly what our manual loop above does.
+        line, err := reader.ReadString('\n')
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("failed to accept conneciton, err",  err)
-			continue
-		}
+        // Note: line may be non-empty even when err != nil.
+        // This happens on EOF without a trailing newline — protocol error.
+        if len(line) > 0 {
+            text := strings.TrimRight(line, "\n")
+            if text == "quit" {
+                conn.Write([]byte("Bye.\n"))
+                return
+            }
+            conn.Write([]byte("Echo: " + text + "\n"))
+        }
 
-		go handleConnection(conn)
-	}
+        if err != nil {
+            if err.Error() != "EOF" {
+                fmt.Println("connection error:", err)
+            }
+            return
+        }
+    }
 }
 
-func handleConnection(con net.Conn) {
-	defer con.Close()
+func main() {
+    ln, err := net.Listen("tcp", ":8080")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("Listening on :8080")
 
-	buf := make([]byte, 4096)
-	for {
-		n, err := con.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return 
-		}
-		if string(buf[:n]) == "q" {
-			fmt.Print("Goodbye")
-			return
-		}	
-		con.Write(buf[:n])
-	}
+    for {
+        conn, err := ln.Accept()
+        if err != nil {
+            fmt.Println("accept error:", err)
+            continue
+        }
+        go handleConn(conn) // each client gets its own goroutine
+    }
 }
