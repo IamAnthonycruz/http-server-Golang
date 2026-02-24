@@ -1,39 +1,37 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"strings"
 )
-
-func handleConn(conn net.Conn) {
+func httpRequestParser(conn net.Conn){
     defer conn.Close()
-
-    reader := bufio.NewReader(conn)
-
+    buf := make([]byte, 8192)
+    var fullRequest []byte
     for {
-        // ReadString blocks until it finds '\n' or hits an error.
-        // Internally it does exactly what our manual loop above does.
-        line, err := reader.ReadString('\n')
-
-        // Note: line may be non-empty even when err != nil.
-        // This happens on EOF without a trailing newline — protocol error.
-        if len(line) > 0 {
-            text := strings.TrimRight(line, "\n")
-            if text == "quit" {
-                conn.Write([]byte("Bye.\n"))
-                return
-            }
-            conn.Write([]byte("Echo: " + text + "\n"))
-        }
-
+        n, err := conn.Read(buf)
         if err != nil {
-            if err.Error() != "EOF" {
-                fmt.Println("connection error:", err)
-            }
-            return
+            break
         }
+        fullRequest = append(fullRequest, buf[:n]...)
+        if strings.Contains(string(fullRequest), "\r\n\r\n") {
+            header := fullRequest
+            var line []byte
+            for i:=0; i < len(header); i++ {
+                line = append(line, header[i])
+                if len(line) >=2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
+                    fmt.Println("End of line reached")
+                    fmt.Print(string(line))
+
+                    line = nil
+                }
+            }
+            
+        }
+        
+
+    
     }
 }
 
@@ -50,6 +48,7 @@ func main() {
             fmt.Println("accept error:", err)
             continue
         }
-        go handleConn(conn) // each client gets its own goroutine
+        go httpRequestParser(conn)
+         // each client gets its own goroutine
     }
 }
