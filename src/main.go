@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"net"
 	"strings"
@@ -18,59 +17,44 @@ type Header struct {
     Value string
 }
 func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error){
-    
-    var body []byte
-    var fullRequest []byte
     var httpReq HTTPReq
+    var headerArr []Header
+    var totalBytes int
+    count := 0
     for {
-        b, err := reader.ReadByte()
+        b, err := reader.ReadString('\n')
+        totalBytes += len(b)
         if err != nil {
-            return HTTPReq{}, fmt.Errorf("Something went wrong")
+            return HTTPReq{}, fmt.Errorf("Something went wrong %w", err)
         }
-        fullRequest = append(fullRequest, b)
-        if len(fullRequest) > 8192 {
+        if totalBytes > 8192 {
             return HTTPReq{}, fmt.Errorf("Buffer is too large")
         }
-        if strings.Contains(string(fullRequest), "\r\n\r\n") {
-            idx := bytes.Index(fullRequest, []byte("\r\n\r\n"))
-            header := fullRequest[:idx]
-            body = append(body, fullRequest[idx+4:]...) //todo
-            var headerArr []Header
-            
-            var line []byte
-
-            count := 0
-            for i:=0; i < len(header); i++ {
-                line = append(line, header[i])
-                if len(line) >=2 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
-                    if count == 0{
-                        lineData := strings.Split(string(line), " ")
-                        httpReq.Method = strings.TrimSpace(lineData[0])
-                        httpReq.URI = strings.TrimSpace(lineData[1])
-                        httpReq.Version = strings.TrimSpace(lineData[2])
-
-                    }else{
-                        lineData := strings.SplitN(string(line), ":", 2)
-                        myHeader := Header{
-                            Name: strings.TrimSpace(lineData[0]),
-                            Value: strings.TrimSpace(lineData[1]),
-                        }
-                        headerArr = append(headerArr, myHeader)
-                    }
-                    count++
-                    line = nil
-                }
-            }
-            httpReq.Headers=headerArr
+        if b == "\r\n" {
             break
-            
         }
-        
+        line:= b
 
-    
-    }
+        if count == 0 {
+            lineData := strings.Split(string(line), " ")
+            httpReq.Method = strings.TrimSpace(lineData[0])
+            httpReq.URI = strings.TrimSpace(lineData[1])
+            httpReq.Version = strings.TrimSpace(lineData[2])
+        }else{
+            lineData := strings.SplitN(string(line), ":", 2)
+            myHeader := Header{
+            Name: strings.TrimSpace(lineData[0]),
+            Value: strings.TrimSpace(lineData[1]),
+            }
+            headerArr = append(headerArr, myHeader)
+        }
+        count++
+    } 
+    httpReq.Headers = headerArr
     return  httpReq, nil
 }
+
+
 
 func main() {
     ln, err := net.Listen("tcp", ":8080")
@@ -86,6 +70,6 @@ func main() {
             continue
         }
         go parseHTTPRequest(bufio.NewReader(conn))
-         // each client gets its own goroutine
+        
     }
 }
