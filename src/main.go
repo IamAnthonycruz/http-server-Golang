@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"net"
@@ -16,21 +17,19 @@ type Header struct {
     Name string
     Value string
 }
-func parseHTTPRequest(conn net.Conn) HTTPReq{
-    defer conn.Close()
-    buf := make([]byte, 8192)
+func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error){
+    
     var body []byte
     var fullRequest []byte
     var httpReq HTTPReq
     for {
-        n, err := conn.Read(buf)
+        b, err := reader.ReadByte()
         if err != nil {
-            break
+            return HTTPReq{}, fmt.Errorf("Something went wrong")
         }
-        fullRequest = append(fullRequest, buf[:n]...)
+        fullRequest = append(fullRequest, b)
         if len(fullRequest) > 8192 {
-            
-            return HTTPReq{}
+            return HTTPReq{}, fmt.Errorf("Buffer is too large")
         }
         if strings.Contains(string(fullRequest), "\r\n\r\n") {
             idx := bytes.Index(fullRequest, []byte("\r\n\r\n"))
@@ -70,7 +69,7 @@ func parseHTTPRequest(conn net.Conn) HTTPReq{
 
     
     }
-    return  httpReq
+    return  httpReq, nil
 }
 
 func main() {
@@ -86,7 +85,7 @@ func main() {
             fmt.Println("accept error:", err)
             continue
         }
-        go parseHTTPRequest(conn)
+        go parseHTTPRequest(bufio.NewReader(conn))
          // each client gets its own goroutine
     }
 }
