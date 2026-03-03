@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -102,6 +103,41 @@ func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error){
     return  httpReq, nil
 }
 
+func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyReader io.Reader ) (error){
+    writer := bufio.NewWriter(conn)
+    var startline string
+    
+    responseCodeMap := map[int]string{
+        200: "OK",
+        201: "Created",
+        204: "No Content",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        500: "Internal Server Error",
+    }
+    reason, ok := responseCodeMap[statusCode]
+    if ok {
+        startline = fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reason)
+    }else{
+        return errors.New("Status code is invalid")
+    } 
+    writer.Write([]byte(startline))
+    for _, h := range headers{
+        headerLine := h.Name + ": " + h.Value + "\r\n"          
+        writer.Write([]byte(headerLine))
+    }
+    writer.Write([]byte("\r\n"))
+    writer.Flush()
+    _, err := io.Copy(conn, bodyReader)
+    
+    if err != nil{
+        return fmt.Errorf("An error occured %w", err)
+    }
+    
+    return nil
+
+}
 
 
 func main() {
