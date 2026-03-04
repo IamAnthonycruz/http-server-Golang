@@ -9,151 +9,188 @@ import (
 	"strconv"
 	"strings"
 )
+
 type HTTPReq struct {
-    Method string
-    URI string
-    Version string
-    Headers []Header
-    Body io.Reader
+	Method  string
+	URI     string
+	Version string
+	Headers []Header
+	Body    io.Reader
 }
+
 type Header struct {
-    Name string
-    Value string
+	Name  string
+	Value string
 }
+
 type LimitedBodyReader struct {
-    buf *bufio.Reader
-    remaining int
+	buf       *bufio.Reader
+	remaining int
 }
 
-func (r *LimitedBodyReader)Read(p []byte)(int, error){
-    if r.remaining == 0{
-        return 0, io.EOF
-    }else{
-        bytesIWant := min(len(p), r.remaining)
-        n,err := r.buf.Read(p[:bytesIWant])
-        if err != nil {
-            return 0, fmt.Errorf("An error occurred %w", err)
-        }
-        r.remaining -= n
-        return n, nil
+func (r *LimitedBodyReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
 
-    }
-}
-func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error){
-    var httpReq HTTPReq
-    var headerArr []Header
-    var headerBytes int
-    var contentLength int
-    var limitedBodyReader LimitedBodyReader
-    isHeaderComplete := false
-    count := 0
-    for {
-        bytes, err := reader.ReadString('\n')
-        
-        line:= bytes
-        if err != nil {
-            return HTTPReq{}, fmt.Errorf("Something went wrong %w", err)
-        }
-        if isHeaderComplete == false {
-            headerBytes += len(bytes)
-            if headerBytes > 8192 {
-                return HTTPReq{}, fmt.Errorf("Buffer is too large")
-                
-            }
-            if bytes == "\r\n" {
-                isHeaderComplete = true
-                continue
-            }
-            if count == 0 {
-                lineData := strings.Split(string(line), " ")
-                httpReq.Method = strings.TrimSpace(lineData[0])
-                httpReq.URI = strings.TrimSpace(lineData[1])
-                httpReq.Version = strings.TrimSpace(lineData[2])
-            }else{
-                lineData := strings.SplitN(string(line), ":", 2)
-            myHeader := Header{
-            Name: strings.ToLower(strings.TrimSpace(lineData[0])),
-            Value: strings.TrimSpace(lineData[1]),
-            }
-            headerArr = append(headerArr, myHeader)
-        }
-        count++
-        
-        } else if(isHeaderComplete == true){
-            httpReq.Headers = headerArr
-            if httpReq.Method == "GET" || httpReq.Method == "HEAD"{
-                return httpReq, nil
-            }
-            for header := range headerArr{
-                if headerArr[header].Name == "content-length"{
-                    contentLength, err = strconv.Atoi(headerArr[header].Value)
-                    if err != nil{
-                        return HTTPReq{}, fmt.Errorf("An error occurred %w", err)
-                    }
-                }
-            }
-            limitedBodyReader.buf = reader
-            limitedBodyReader.remaining = contentLength
-            httpReq.Body = &limitedBodyReader
-            break
-        }
-    
-    }
-    
-    return  httpReq, nil
+	bytesIWant := min(len(p), r.remaining)
+	n, err := r.buf.Read(p[:bytesIWant])
+	if err != nil {
+		return 0, fmt.Errorf("an error occurred: %w", err)
+	}
+	r.remaining -= n
+	return n, nil
 }
 
-func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyReader io.Reader ) (error){
-    writer := bufio.NewWriter(conn)
-    var startline string
-    
-    responseCodeMap := map[int]string{
-        200: "OK",
-        201: "Created",
-        204: "No Content",
-        401: "Unauthorized",
-        403: "Forbidden",
-        404: "Not Found",
-        500: "Internal Server Error",
-    }
-    reason, ok := responseCodeMap[statusCode]
-    if ok {
-        startline = fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reason)
-    }else{
-        return errors.New("Status code is invalid")
-    } 
-    writer.Write([]byte(startline))
-    for _, h := range headers{
-        headerLine := h.Name + ": " + h.Value + "\r\n"          
-        writer.Write([]byte(headerLine))
-    }
-    writer.Write([]byte("\r\n"))
-    writer.Flush()
-    _, err := io.Copy(conn, bodyReader)
-    
-    if err != nil{
-        return fmt.Errorf("An error occured %w", err)
-    }
-    
-    return nil
+func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error) {
+	var httpReq HTTPReq
+	var headerArr []Header
+	var headerBytes int
+	var contentLength int
+	count := 0
 
+	for {
+		bytes, err := reader.ReadString('\n')
+		if err != nil {
+			return HTTPReq{}, fmt.Errorf("something went wrong: %w", err)
+		}
+
+		headerBytes += len(bytes)
+		if headerBytes > 8192 {
+			return HTTPReq{}, fmt.Errorf("headers too large")
+		}
+
+		// Blank line signals end of headers
+		if bytes == "\r\n" {
+			httpReq.Headers = headerArr
+
+			if httpReq.Method == "GET" || httpReq.Method == "HEAD" {
+				return httpReq, nil
+			}
+
+			for _, h := range headerArr {
+				if h.Name == "content-length" {
+					contentLength, err = strconv.Atoi(h.Value)
+					if err != nil {
+						return HTTPReq{}, fmt.Errorf("invalid content-length: %w", err)
+					}
+				}
+			}
+
+			httpReq.Body = &LimitedBodyReader{
+				buf:       reader,
+				remaining: contentLength,
+			}
+			return httpReq, nil
+		}
+
+		// Parse request line
+		if count == 0 {
+			lineData := strings.Split(bytes, " ")
+			if len(lineData) < 3 {
+				return HTTPReq{}, fmt.Errorf("malformed request line: %q", bytes)
+			}
+			httpReq.Method = strings.TrimSpace(lineData[0])
+			httpReq.URI = strings.TrimSpace(lineData[1])
+			httpReq.Version = strings.TrimSpace(lineData[2])
+		} else {
+			// Parse header line
+			lineData := strings.SplitN(bytes, ":", 2)
+			if len(lineData) < 2 {
+				return HTTPReq{}, fmt.Errorf("malformed header line: %q", bytes)
+			}
+			myHeader := Header{
+				Name:  strings.ToLower(strings.TrimSpace(lineData[0])),
+				Value: strings.TrimSpace(lineData[1]),
+			}
+			headerArr = append(headerArr, myHeader)
+		}
+
+		count++
+	}
 }
 
+func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyReader io.Reader) error {
+	writer := bufio.NewWriter(conn)
+
+	responseCodeMap := map[int]string{
+		200: "OK",
+		201: "Created",
+		204: "No Content",
+		400: "Bad Request",
+		401: "Unauthorized",
+		403: "Forbidden",
+		404: "Not Found",
+		408: "Request Timeout",
+		499: "Client Closed Request",
+		500: "Internal Server Error",
+	}
+
+	reason, ok := responseCodeMap[statusCode]
+	if !ok {
+		return errors.New("status code is invalid")
+	}
+
+	startline := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reason)
+	writer.Write([]byte(startline))
+
+	for _, h := range headers {
+		headerLine := h.Name + ": " + h.Value + "\r\n"
+		writer.Write([]byte(headerLine))
+	}
+
+	writer.Write([]byte("\r\n"))
+
+	_, err := io.Copy(writer, bodyReader)
+	if err != nil {
+		return fmt.Errorf("an error occurred: %w", err)
+	}
+
+	writer.Flush()
+	return nil
+}
 
 func main() {
-    ln, err := net.Listen("tcp", ":8080")
-    if err != nil {
-        panic(err)
-    }
-    fmt.Println("Listening on :8080")
+	ln, err := net.Listen("tcp", ":8080")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Listening on :8080")
 
-    for {
-        conn, err := ln.Accept()
-        if err != nil {
-            fmt.Println("accept error:", err)
-            continue
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Println("accept error:", err)
+			return
+		}
+
+		go func(conn net.Conn) {
+            defer conn.Close()
+			reader := bufio.NewReader(conn)
+            for{
+				req, err := parseHTTPRequest(reader)
+				if errors.Is(err, io.EOF) {
+					return
+				}else if err != nil {
+					fmt.Println("parse error:", err)
+					httpResponseWriter(conn, 400, []Header{}, strings.NewReader(""))
+					return
+				}
+
+				
+				
+				
+
+				if req.Body == nil{
+                    req.Body = strings.NewReader("")
+                }
+				header := Header{Name: "Content-Length", Value: "11"}
+                httpResponseWriter(conn, 200, []Header{header}, strings.NewReader("Hello world"))
+                io.Copy(io.Discard, req.Body)
+                if req.Version == "HTTP/1.0" {
+                    break
+                }
         }
-        go parseHTTPRequest(bufio.NewReader(conn))
-        
-    }
+		}(conn)
+	}
 }
