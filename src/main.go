@@ -17,7 +17,9 @@ type HTTPReq struct {
 	Headers []Header
 	Body    io.Reader
 }
-
+type ChunkedWriter struct {
+	w io.Writer
+}
 type Header struct {
 	Name  string
 	Value string
@@ -27,7 +29,21 @@ type LimitedBodyReader struct {
 	buf       *bufio.Reader
 	remaining int
 }
-
+func (cw *ChunkedWriter) Write(p []byte) (int, error){
+	if len(p) == 0 {
+		return 0, nil
+	}
+	_, err := fmt.Fprintf(cw.w, "%x\r\n", len(p))
+	if err != nil {return 0, err}
+	n, err := cw.w.Write(p)
+	if err != nil {return n, err}
+	_,err = cw.w.Write([]byte("\r\n"))
+	return n,err
+}
+func (cw *ChunkedWriter) Close() error {
+	_,err := cw.w.Write([]byte("0\r\n\r\n"))
+	return err
+}
 func (r *LimitedBodyReader) Read(p []byte) (int, error) {
 	if r.remaining == 0 {
 		return 0, io.EOF
@@ -112,7 +128,7 @@ func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error) {
 
 func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyReader io.Reader) error {
 	writer := bufio.NewWriter(conn)
-
+	isContentLength := false
 	responseCodeMap := map[int]string{
 		200: "OK",
 		201: "Created",
@@ -133,19 +149,37 @@ func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyRea
 
 	startline := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reason)
 	writer.Write([]byte(startline))
-
+	
 	for _, h := range headers {
+		if h.Name == "content-length" && h.Value != "" {
+			isContentLength = true
+		}
 		headerLine := h.Name + ": " + h.Value + "\r\n"
+		
 		writer.Write([]byte(headerLine))
 	}
-
+	if isContentLength == false {
+		headerLine := "Transfer-Encoding"+ ": "+"chunked" + "\r\n"
+		writer.Write([]byte(headerLine))
+	}
 	writer.Write([]byte("\r\n"))
 
-	_, err := io.Copy(writer, bodyReader)
-	if err != nil {
-		return fmt.Errorf("an error occurred: %w", err)
-	}
+	if isContentLength == true{
+		_, err := io.Copy(writer, bodyReader)
+		if err != nil {
+			return fmt.Errorf("an error occurred: %w", err)
+		}
 
+	}else{
+		var chunkWriter ChunkedWriter
+		chunkWriter.w = writer
+		_, err := io.Copy(&chunkWriter, bodyReader)
+		if err != nil {
+			return fmt.Errorf("an error occured: %w", err)
+		}
+		chunkWriter.Close()
+	}
+	
 	writer.Flush()
 	return nil
 }
