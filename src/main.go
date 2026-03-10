@@ -20,6 +20,10 @@ type HTTPReq struct {
 type ChunkedWriter struct {
 	w io.Writer
 }
+type ChunkedReader struct {
+	r *bufio.Reader
+	remaining int
+}
 type Header struct {
 	Name  string
 	Value string
@@ -28,6 +32,46 @@ type Header struct {
 type LimitedBodyReader struct {
 	buf       *bufio.Reader
 	remaining int
+}
+func (cr *ChunkedReader) Read(p []byte)(int, error){
+	if cr.remaining == 0 {
+		line, err := cr.r.ReadString('\n')
+		if err != nil{
+			return 0, err
+		}
+		cleanStr := strings.TrimSpace(line)
+		val, err := strconv.ParseInt(cleanStr, 16, 64)
+		if err != nil {
+			return 0, err
+		}
+		if val == 0 {
+			_,err := cr.r.ReadString('\n')
+			if err != nil {
+				return 0, err
+			}
+			
+					return 0, io.EOF
+			
+			
+		}
+		cr.remaining = int(val)
+
+	}
+	bytesIWant := min(len(p), cr.remaining)
+	n, err := cr.r.Read(p[:bytesIWant])
+	if err != nil {
+		return 0, fmt.Errorf("an error occurred: %w", err)
+	}
+	cr.remaining -= n
+	if cr.remaining == 0 {
+		_, err := cr.r.ReadString('\n')
+		if err != nil {
+			return 0, err
+		}
+		
+	}
+	return n, nil
+	
 }
 func (cw *ChunkedWriter) Write(p []byte) (int, error){
 	if len(p) == 0 {
@@ -44,11 +88,11 @@ func (cw *ChunkedWriter) Close() error {
 	_,err := cw.w.Write([]byte("0\r\n\r\n"))
 	return err
 }
+
 func (r *LimitedBodyReader) Read(p []byte) (int, error) {
 	if r.remaining == 0 {
 		return 0, io.EOF
 	}
-
 	bytesIWant := min(len(p), r.remaining)
 	n, err := r.buf.Read(p[:bytesIWant])
 	if err != nil {
@@ -63,6 +107,7 @@ func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error) {
 	var headerArr []Header
 	var headerBytes int
 	var contentLength int
+	
 	count := 0
 
 	for {
@@ -90,14 +135,18 @@ func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error) {
 					if err != nil {
 						return HTTPReq{}, fmt.Errorf("invalid content-length: %w", err)
 					}
+					httpReq.Body = &LimitedBodyReader{
+					buf:       reader,
+					remaining: contentLength,
+				}}else if h.Value == "chunked"{
+					
+					httpReq.Body = &ChunkedReader{
+					r: reader,
+					remaining: 0,
+					}
 				}
 			}
-
-			httpReq.Body = &LimitedBodyReader{
-				buf:       reader,
-				remaining: contentLength,
-			}
-			return httpReq, nil
+			
 		}
 
 		// Parse request line
@@ -116,7 +165,7 @@ func parseHTTPRequest(reader *bufio.Reader) (HTTPReq, error) {
 				return HTTPReq{}, fmt.Errorf("malformed header line: %q", bytes)
 			}
 			myHeader := Header{
-				Name:  strings.ToLower(strings.TrimSpace(lineData[0])),
+				Name:  strings.TrimSpace(lineData[0]),
 				Value: strings.TrimSpace(lineData[1]),
 			}
 			headerArr = append(headerArr, myHeader)
