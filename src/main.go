@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -233,6 +234,27 @@ func httpResponseWriter(conn net.Conn, statusCode int, headers []Header, bodyRea
 	return nil
 }
 
+func sanitizeResource(URI string)(cleanURI string, err error){
+	if len(URI) == 0 {
+		return "", fmt.Errorf("Please enter a valid URI")
+	}
+	_,rest,_ := strings.Cut(URI, "/")
+	_, remainder, found := strings.Cut(rest,"/")
+	remainder = filepath.Clean(remainder)
+	
+	if found {
+		final := filepath.Join("static", remainder)
+		if strings.HasPrefix(final, "static/"){
+		return final, nil
+		}else {
+			return "", fmt.Errorf("File not valid")
+		}
+	} else {
+		return "", fmt.Errorf("File not valid")
+	}
+
+}
+
 func main() {
 	ln, err := net.Listen("tcp", ":8080")
 	if err != nil {
@@ -258,12 +280,14 @@ func main() {
 					fmt.Println("parse error:", err)
 					httpResponseWriter(conn, 400, []Header{}, strings.NewReader(""))
 					return
-				}
-
+				} /*
+				resource := req.URI
+				sanatizedresouce = func sanitizeResource(resource)
+				if sanatizedresource in some datastructure containing our uris
+					stream our body back
+				else throw some resource not found error and respond with 404
+					*/
 				
-				
-				
-
 				if req.Body == nil{
                     req.Body = strings.NewReader("")
                 }
