@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -271,6 +272,7 @@ func main() {
 
 		go func(conn net.Conn) {
             defer conn.Close()
+			
 			reader := bufio.NewReader(conn)
             for{
 				req, err := parseHTTPRequest(reader)
@@ -280,14 +282,41 @@ func main() {
 					fmt.Println("parse error:", err)
 					httpResponseWriter(conn, 400, []Header{}, strings.NewReader(""))
 					return
-				} /*
+				} 
 				resource := req.URI
-				sanatizedresouce = func sanitizeResource(resource)
-				if sanatizedresource in some datastructure containing our uris
-					stream our body back
-				else throw some resource not found error and respond with 404
-					*/
-				
+				sanitizedResource, err := sanitizeResource(resource)
+				if err != nil {
+					httpResponseWriter(conn, 404, []Header{}, strings.NewReader("Not Found"))
+					io.Copy(io.Discard, req.Body)
+					continue
+				}else{
+					data, err := os.Open(sanitizedResource)
+					if err != nil {
+						httpResponseWriter(conn, 404, []Header{}, strings.NewReader("Not Found"))
+						io.Copy(io.Discard, req.Body)
+						continue
+					}else{
+						dataInfo,err := data.Stat()
+						if err != nil {
+							httpResponseWriter(conn, 404, []Header{}, strings.NewReader("Not Found"))
+							io.Copy(io.Discard, req.Body)
+							data.Close()
+							continue
+						}
+						header := Header{Name: "Content-Length",Value: strconv.FormatInt(dataInfo.Size(), 10) }
+					httpResponseWriter(conn, 200, []Header{header}, data)
+					io.Copy(io.Discard, req.Body)
+					data.Close()
+					}
+					
+					
+
+					
+					if req.Version == "HTTP/1.0" {
+						break
+					}
+				}
+				/*
 				if req.Body == nil{
                     req.Body = strings.NewReader("")
                 }
@@ -296,8 +325,9 @@ func main() {
                 io.Copy(io.Discard, req.Body)
                 if req.Version == "HTTP/1.0" {
                     break
-                }
+                }*/
         }
+		
 		}(conn)
 	}
 }
