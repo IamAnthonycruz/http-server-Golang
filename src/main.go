@@ -277,7 +277,7 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("Listening on :8080")
-
+	
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -320,6 +320,8 @@ func main() {
 					data.Close()
 					continue
 				}
+				rangeStart := -1
+				rangeEnd:= -1
 				for header := range req.Headers{
 					if req.Headers[header].Name == "range" && req.Headers[header].Value != ""{
 					rangeBytes := strings.TrimSpace(req.Headers[header].Value)
@@ -331,29 +333,54 @@ func main() {
 							if found && before != "" && after != ""{
 								intBefore, err := strconv.Atoi(before)
 								if err != nil{
-									var header Header
-									header.Name = "Content-Range"
-									header.Value = ""
-									httpResponseWriter(conn, 500,  []Header{header}, strings.NewReader("Internal Server Error"))
-									continue
+									break
 								}
 								intAfter, err := strconv.Atoi(after)
 								if err != nil {
-									httpResponseWriter(conn, 500, []Header{}, strings.NewReader("Internal Server Error"))
-									continue
+									break
 								}
-								fmt.Printf("", intBefore, intAfter)
-								
+								rangeStart = intBefore
+								rangeEnd = intAfter
+								fmt.Printf("%d, %d", intBefore, intAfter)
 							}else if found && before != "" && after == ""{
-								fmt.Print("Case 2")
+								intBefore,err := strconv.Atoi(before)
+								if err != nil{
+									break
+								}
+								rangeStart = intBefore
+								rangeEnd = int(dataInfo.Size()) - 1
+
 							}else if found && before == "" && after != ""{
-								fmt.Print("Case 3")
+								intAfter,err := strconv.Atoi(after)
+								if err != nil{
+									break
+								}
+								rangeStart = int(dataInfo.Size()) - intAfter
+								rangeEnd = int(dataInfo.Size())-1
 							}
 						}
 					}
+				}}
+			if rangeStart != -1 && rangeEnd != -1{
+			
+				dataLen := dataInfo.Size()
+				contLength := rangeEnd - rangeStart +1
+				contLengthStr := strconv.Itoa(contLength)
+				contentLength := Header{
+					Name: "Content-Length",
+					Value: contLengthStr,
 				}
+				contentRange := Header{
+					Name: "Content-Range",
+					Value: "bytes " + strconv.Itoa(rangeStart) + "-" + strconv.Itoa(rangeEnd) + "/" + strconv.Itoa(int(dataLen)),
 				}
-
+				data.Seek(int64(rangeStart), io.SeekStart)
+				httpResponseWriter(conn, 206, []Header{contentLength, contentRange}, io.LimitReader(data, int64(rangeEnd-rangeStart+1)))
+				
+				drainBody(req.Body)
+				data.Close()
+				continue
+			}
 				header := Header{
 					Name:  "Content-Length",
 					Value: strconv.FormatInt(dataInfo.Size(), 10),
